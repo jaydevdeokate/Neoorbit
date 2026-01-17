@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Neoorbit</title>
+<style>
+  html,body{
+    margin:0;padding:0;background:#000;
+    font-family:system-ui;overflow:hidden;
+  }
+  canvas{
+    position:absolute;inset:0;
+    pointer-events:none;display:block;
+  }
+  #welcome{
+    position:fixed;inset:0;background:#000;
+    display:flex;flex-direction:column;
+    justify-content:center;align-items:center;
+    gap:20px;color:#dff;z-index:30;
+  }
+  .pill{
+    padding:14px 36px;border-radius:40px;
+    border:none;font-weight:700;font-size:20px;
+    cursor:pointer;
+  }
+  #echoBtn{background:#1976ff;color:white;}
+  #voidBtn{background:#ff2b2b;color:white;}
+  #scoreBox{
+    position:fixed;top:12px;left:50%;
+    transform:translateX(-50%);
+    color:white;font-weight:700;font-size:22px;
+    z-index:9999;display:none;
+  }
+  #flipBtn{
+    position:fixed;bottom:26px;left:50%;
+    transform:translateX(-50%);
+    padding:14px 40px;border-radius:12px;
+    background:#ffcc00;border:none;
+    font-weight:800;touch-action:manipulation;
+    display:none;z-index:2147483647;
+  }
+  #pauseBtn,#muteBtn{
+    position:fixed;top:12px;padding:8px 12px;
+    border:none;border-radius:8px;
+    background:rgba(255,255,255,0.15);
+    color:white;font-weight:700;backdrop-filter:blur(4px);
+    z-index:9999;
+  }
+  #pauseBtn{left:12px;}
+  #muteBtn{right:12px;}
+  #flash{
+    position:fixed;inset:0;
+    background:rgba(200,255,150,0.25);
+    opacity:0;transition:.25s;
+    pointer-events:none;z-index:20;
+  }
+  #gameover{
+    position:fixed;inset:0;background:rgba(0,0,0,0.75);
+    display:none;flex-direction:column;
+    justify-content:center;align-items:center;
+    font-size:26px;color:white;z-index:40;
+  }
+  #gameover button{
+    margin-top:12px;padding:12px 26px;
+    border:none;border-radius:10px;
+    background:#ffcc00;font-weight:800;
+  }
+</style>
+</head>
+<body>
+
+<!-- Matrix (welcome only) -->
+<canvas id="matrix"></canvas>
+<!-- Game -->
+<canvas id="game"></canvas>
+
+<!-- Welcome -->
+<div id="welcome">
+  <div style="font-size:30px;font-weight:800;color:#bff;">NEOORBIT</div>
+  <div style="display:flex;gap:14px">
+    <button id="echoBtn" class="pill">ECHO MODE</button>
+    <button id="voidBtn" class="pill">VOID MODE</button>
+  </div>
+  <div style="font-size:13px;color:#888">Choose your mode.</div>
+</div>
+
+<div id="scoreBox">0</div>
+<button id="flipBtn">FLIP</button>
+<button id="pauseBtn">⏸</button>
+<button id="muteBtn">🔊</button>
+
+<div id="flash"></div>
+
+<div id="gameover">
+  <div id="overText"></div>
+  <div id="finalScore" style="margin-top:8px;font-size:18px;color:#ccc;"></div>
+  <button onclick="location.reload()">Restart</button>
+</div>
+
+<script>
+/* ============================================================
+   PURE DOOM-STYLE SFX (No music)
+============================================================ */
+const AudioCtx = window.AudioContext||window.webkitAudioContext;
+const audio = new AudioCtx();
+let muted = false;
+
+/* Doom-like: BLAST then SHHH tail */
+function playStartBlast(){
+  if(muted) return;
+
+  // Blast (low square)
+  const osc = audio.createOscillator();
+  const g = audio.createGain();
+  osc.type="square";
+  osc.frequency.value=100;
+  g.gain.value=0.4;
+
+  // Noise tail
+  const noise = audio.createBufferSource();
+  const buffer = audio.createBuffer(1, 44100, audio.sampleRate);
+  const data = buffer.getChannelData(0);
+  for(let i=0;i<data.length;i++){
+    data[i] = (Math.random()*2-1)*0.25; // low volume static
+  }
+  noise.buffer = buffer;
+
+  // fast fade-out
+  g.gain.exponentialRampToValueAtTime(0.001, audio.currentTime+0.12);
+
+  osc.connect(g);
+  noise.connect(g);
+  g.connect(audio.destination);
+
+  osc.start();
+  noise.start();
+  osc.stop(audio.currentTime+0.12);
+  noise.stop(audio.currentTime+0.12);
+}
+
+/* CDMA keypad BEEP */
+function playBeep(){
+  if(muted) return;
+  const o = audio.createOscillator();
+  const g = audio.createGain();
+  o.type="square";
+  o.frequency.value=600;
+  g.gain.value=0.18;
+  o.connect(g); g.connect(audio.destination);
+  o.start();
+  o.stop(audio.currentTime+0.07);
+}
+
+/* Game over low tone */
+function playDeathTone(){
+  if(muted) return;
+  const o=audio.createOscillator(), g=audio.createGain();
+  o.type="square"; o.frequency.value=120;
+  g.gain.setValueAtTime(0.35,audio.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001,audio.currentTime+0.3);
+  o.connect(g); g.connect(audio.destination);
+  o.start(); o.stop(audio.currentTime+0.3);
+}
+
+/* ============================================================
+   MATRIX (welcome only)
+============================================================ */
+const mC=document.getElementById("matrix");
+const mtx=mC.getContext("2d");
+mC.width=innerWidth; mC.height=innerHeight;
+let cols=Math.floor(innerWidth/12);
+let drops=new Array(cols).fill(1);
+const glyphs="01<>ﾊﾟﾁ!";
+
+function drawMatrix(){
+  mtx.fillStyle="rgba(0,0,0,0.18)";
+  mtx.fillRect(0,0,mC.width,mC.height);
+  mtx.fillStyle="rgba(0,255,120,0.75)";
+  mtx.font="12px monospace";
+  for(let i=0;i<drops.length;i++){
+    const ch=glyphs[Math.floor(Math.random()*glyphs.length)];
+    mtx.fillText(ch, i*12, drops[i]*12);
+    if(drops[i]*12 > mC.height && Math.random()>0.975) drops[i]=0;
+    drops[i]++;
+  }
+}
+let matrixLoop=setInterval(drawMatrix,40);
+
+/* ============================================================
+   GAME
+============================================================ */
+const gC=document.getElementById("game");
+const ctx=gC.getContext("2d");
+gC.width=innerWidth; gC.height=innerHeight;
+
+let mode="echo";
+let speed=0.04, maxSpeed=0.11;
+let angle=0, direction=1;
+let bullets=[];
+let desiredBullets=1;
+let score=0, paused=false, nextBoost=100;
+let shield=false, shieldTimer=0, nearMiss=0;
+
+function newBullet(){
+  const a=Math.random()*Math.PI*2;
+  const sp=2+Math.random()*2;
+  return{
+    x:gC.width/2+Math.cos(a)*520,
+    y:gC.height/2+Math.sin(a)*520,
+    vx:-Math.cos(a)*sp,
+    vy:-Math.sin(a)*sp,
+    size:12,
+    flagged:false
+  };
+}
+function ensureBullets(){
+  while(bullets.length < desiredBullets) bullets.push(newBullet());
+}
+
+/* ============================
+   Start Game
+============================ */
+const welcome=document.getElementById("welcome");
+const scoreBox=document.getElementById("scoreBox");
+const flipBtn=document.getElementById("flipBtn");
+const pauseBtn=document.getElementById("pauseBtn");
+const muteBtn=document.getElementById("muteBtn");
+
+document.getElementById("echoBtn").onclick=()=>start("echo");
+document.getElementById("voidBtn").onclick=()=>start("void");
+
+function start(m){
+  try{ audio.resume(); }catch(e){}
+  playStartBlast(); // DOOM BLAST
+
+  mode=m;
+  welcome.style.display="none";
+  clearInterval(matrixLoop);
+  mC.style.display="none";
+
+  scoreBox.style.display="block";
+  flipBtn.style.display="block";
+
+  if(m==="void"){
+    speed=0.07; maxSpeed=0.17; desiredBullets=3;
+  }
+
+  ensureBullets();
+  requestAnimationFrame(loop);
+}
+
+/* ============================
+   UI Buttons
+============================ */
+flipBtn.onclick=()=>{ if(!paused){ direction*=-1; playBeep(); } };
+pauseBtn.onclick=()=>{ paused=!paused; pauseBtn.innerText=paused?"▶":"⏸"; playBeep(); };
+muteBtn.onclick=()=>{ muted=!muted; muteBtn.innerText=muted?"🔇":"🔊"; playBeep(); };
+
+/* ============================
+   Main Loop
+============================ */
+function loop(){
+  if(paused){ requestAnimationFrame(loop); return; }
+
+  ctx.clearRect(0,0,gC.width,gC.height);
+
+  angle += speed*direction;
+  const px=gC.width/2 + Math.cos(angle)*120;
+  const py=gC.height/2 + Math.sin(angle)*120;
+
+  ctx.fillStyle=(mode==="void")?"#ff4b4b":"#1e90ff";
+  ctx.beginPath(); ctx.arc(px,py,20,0,Math.PI*2); ctx.fill();
+
+  if(shield){
+    ctx.beginPath(); ctx.arc(px,py,28,0,Math.PI*2);
+    ctx.strokeStyle="cyan"; ctx.lineWidth=3; ctx.stroke();
+    shieldTimer--; if(shieldTimer<=0) shield=false;
+  }
+
+  ensureBullets();
+
+  for(let i=bullets.length-1;i>=0;i--){
+    const b=bullets[i];
+    b.x+=b.vx; b.y+=b.vy;
+
+    const dx=px-b.x, dy=py-b.y, dist=Math.hypot(dx,dy);
+
+    if(dist<28){
+      if(!shield) return endGame("Game Over");
+      bullets.splice(i,1); continue;
+    }
+
+    if(dist<60 && !b.flagged){
+      b.flagged=true;
+      nearMiss++;
+      playBeep(); // CDMA beep for near-miss
+      if(nearMiss>=3){
+        nearMiss=0;
+        shield=true; shieldTimer=60;
+      }
+    }
+
+    const cd=Math.hypot(b.x-gC.width/2,b.y-gC.height/2);
+    if(cd<6 || b.x<-900 || b.x>gC.width+900 || b.y<-900 || b.y>gC.height+900){
+      bullets.splice(i,1); continue;
+    }
+
+    ctx.fillStyle="red";
+    ctx.beginPath(); ctx.arc(b.x,b.y,b.size,0,Math.PI*2); ctx.fill();
+  }
+
+  score+=0.03;
+  scoreBox.innerText=Math.floor(score);
+
+  if(score>=nextBoost){
+    nextBoost+=100;
+    speed+=0.01;
+    if(speed>maxSpeed) speed=maxSpeed;
+    flash();
+  }
+
+  if(score>=500) return endGame("touch grass 🌱");
+
+  requestAnimationFrame(loop);
+}
+
+/* Flash & End */
+function flash(){
+  flashEl=document.getElementById("flash");
+  flashEl.style.opacity=1;
+  setTimeout(()=>flashEl.style.opacity=0,200);
+}
+
+function endGame(msg){
+  paused=true;
+  playDeathTone();
+  overText.innerText=msg;
+  finalScore.innerText="Score: "+Math.floor(score);
+  gameover.style.display="flex";
+}
+</script>
+</body>
+</html>
