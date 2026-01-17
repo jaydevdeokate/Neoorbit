@@ -68,4 +68,6 @@ Written directly in the browser / GitHub editor.
 
 ## 🌐 Play
 
-You can play the game via **GitHub Pages** once enabled:
+You can play the game via **GitHub Pages** : 
+
+https://jaydevdeokate.github.io/Neoorbit/
