@@ -70,4 +70,4 @@ Written directly in the browser / GitHub editor.
 
 You can play the game via **GitHub Pages** : 
 
-https://jaydevdeokate.github.io/Neoorbit/
+https://a220hz.github.io/Neoorbit/
